@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unixタイムスタンプ 変換 ツール</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold text-center text-indigo-700 mb-2">Unixタイムスタンプ 変換 ツール</h1>
+    <p class="text-center text-gray-500 mb-8">Unixタイムスタンプ ↔ 人間読み可能日時の双方向変換</p>
+
+    <!-- タイムスタンプ → 日時 -->
+    <div class="bg-white rounded-2xl shadow p-6 mb-6">
+      <h2 class="text-lg font-semibold text-indigo-700 mb-4">タイムスタンプ → 日時</h2>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <div class="flex-1 min-w-0">
+          <label for="tsInput" class="block text-sm font-medium text-gray-600 mb-1">Unixタイムスタンプ</label>
+          <input type="text" id="tsInput" placeholder="例: 1700000000"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div class="flex items-end gap-2 pb-0.5">
+          <label class="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer mb-2">
+            <input type="radio" name="tsUnit" id="unitSec" value="sec" checked class="accent-indigo-500"> 秒
+          </label>
+          <label class="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer mb-2">
+            <input type="radio" name="tsUnit" id="unitMs" value="ms" class="accent-indigo-500"> ミリ秒
+          </label>
+        </div>
+        <div class="flex items-end gap-2 pb-0.5">
+          <button id="btnNow" aria-label="現在時刻のタイムスタンプを入力"
+            class="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold px-4 py-2 rounded-lg transition-colors text-sm mb-2">
+            現在時刻
+          </button>
+        </div>
+      </div>
+      <div id="tsResult" class="hidden">
+        <div id="relativeTime" class="text-center text-sm font-medium text-indigo-500 mb-4 bg-indigo-50 rounded-lg py-2"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="tzCards"></div>
+      </div>
+      <div id="tsError" class="hidden text-red-500 text-sm mt-2"></div>
+    </div>
+
+    <!-- 日時 → タイムスタンプ -->
+    <div class="bg-white rounded-2xl shadow p-6 mb-6">
+      <h2 class="text-lg font-semibold text-teal-700 mb-4">日時 → タイムスタンプ</h2>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <div class="flex-1 min-w-0">
+          <label for="dtInput" class="block text-sm font-medium text-gray-600 mb-1">日時（ローカル時刻）</label>
+          <input type="datetime-local" id="dtInput"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-400">
+        </div>
+      </div>
+      <div id="dtResult" class="hidden">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="bg-teal-50 rounded-xl p-4">
+            <div class="text-xs text-teal-600 font-medium mb-1">秒 (Unix timestamp)</div>
+            <div class="flex items-center gap-2">
+              <span id="outSec" class="font-mono text-lg text-teal-800 flex-1"></span>
+              <button onclick="copyText('outSec')" aria-label="秒タイムスタンプをコピー"
+                class="text-xs bg-teal-100 hover:bg-teal-200 text-teal-700 px-2 py-1 rounded transition-colors">コピー</button>
+            </div>
+          </div>
+          <div class="bg-teal-50 rounded-xl p-4">
+            <div class="text-xs text-teal-600 font-medium mb-1">ミリ秒 (ms)</div>
+            <div class="flex items-center gap-2">
+              <span id="outMs" class="font-mono text-lg text-teal-800 flex-1"></span>
+              <button onclick="copyText('outMs')" aria-label="ミリ秒タイムスタンプをコピー"
+                class="text-xs bg-teal-100 hover:bg-teal-200 text-teal-700 px-2 py-1 rounded transition-colors">コピー</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- コピー成功トースト -->
+    <div id="toast" class="fixed bottom-6 right-6 bg-gray-800 text-white text-sm px-4 py-2 rounded-lg shadow-lg opacity-0 transition-opacity duration-300 pointer-events-none">
+      コピーしました
+    </div>
+  </div>
+
+  <script>
+    const TIMEZONES = [
+      { label: 'UTC', tz: 'UTC' },
+      { label: 'JST (東京)', tz: 'Asia/Tokyo' },
+      { label: 'US Eastern', tz: 'America/New_York' },
+      { label: 'US Pacific', tz: 'America/Los_Angeles' },
+    ];
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    function formatInTz(date, tz) {
+      return new Intl.DateTimeFormat('ja-JP', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).format(date).replace(/\//g, '-');
+    }
+
+    function getRelativeTime(date) {
+      const now = Date.now();
+      const diff = date.getTime() - now;
+      const abs = Math.abs(diff);
+      const past = diff < 0;
+      if (abs < 60000) return '約 ' + Math.round(abs/1000) + ' 秒' + (past ? '前' : '後');
+      if (abs < 3600000) return '約 ' + Math.round(abs/60000) + ' 分' + (past ? '前' : '後');
+      if (abs < 86400000) return '約 ' + Math.round(abs/3600000) + ' 時間' + (past ? '前' : '後');
+      return '約 ' + Math.round(abs/86400000) + ' 日' + (past ? '前' : '後');
+    }
+
+    function convertTs() {
+      const raw = document.getElementById('tsInput').value.trim();
+      const unit = document.querySelector('input[name="tsUnit"]:checked').value;
+      const resultEl = document.getElementById('tsResult');
+      const errorEl = document.getElementById('tsError');
+      errorEl.classList.add('hidden');
+      if (!raw) { resultEl.classList.add('hidden'); return; }
+      const num = Number(raw);
+      if (isNaN(num)) {
+        errorEl.textContent = '数値を入力してください';
+        errorEl.classList.remove('hidden');
+        resultEl.classList.add('hidden');
+        return;
+      }
+      const ms = unit === 'ms' ? num : num * 1000;
+      const date = new Date(ms);
+      if (isNaN(date.getTime())) {
+        errorEl.textContent = '無効な値です';
+        errorEl.classList.remove('hidden');
+        resultEl.classList.add('hidden');
+        return;
+      }
+      document.getElementById('relativeTime').textContent = getRelativeTime(date);
+      const cards = document.getElementById('tzCards');
+      cards.innerHTML = TIMEZONES.map(tz => {
+        const formatted = formatInTz(date, tz.tz);
+        const id = 'tz_' + tz.tz.replace(/\//g,'_');
+        return `<div class="bg-indigo-50 rounded-xl p-4">
+          <div class="text-xs text-indigo-600 font-medium mb-1">${escapeHtml(tz.label)}</div>
+          <div class="flex items-center gap-2">
+            <span id="${escapeHtml(id)}" class="font-mono text-sm text-indigo-800 flex-1">${escapeHtml(formatted)}</span>
+            <button onclick="copyText('${escapeHtml(id)}')" aria-label="${escapeHtml(tz.label)}の日時をコピー"
+              class="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-2 py-1 rounded transition-colors flex-shrink-0">コピー</button>
+          </div>
+        </div>`;
+      }).join('');
+      resultEl.classList.remove('hidden');
+    }
+
+    function convertDt() {
+      const val = document.getElementById('dtInput').value;
+      const resultEl = document.getElementById('dtResult');
+      if (!val) { resultEl.classList.add('hidden'); return; }
+      const date = new Date(val);
+      if (isNaN(date.getTime())) { resultEl.classList.add('hidden'); return; }
+      const sec = Math.floor(date.getTime() / 1000);
+      const ms = date.getTime();
+      document.getElementById('outSec').textContent = sec;
+      document.getElementById('outMs').textContent = ms;
+      resultEl.classList.remove('hidden');
+    }
+
+    function copyText(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      navigator.clipboard.writeText(el.textContent).then(() => showToast()).catch(() => {});
+    }
+
+    function showToast() {
+      const t = document.getElementById('toast');
+      t.style.opacity = '1';
+      setTimeout(() => { t.style.opacity = '0'; }, 1800);
+    }
+
+    document.getElementById('btnNow').addEventListener('click', () => {
+      const unit = document.querySelector('input[name="tsUnit"]:checked').value;
+      const now = unit === 'ms' ? Date.now() : Math.floor(Date.now() / 1000);
+      document.getElementById('tsInput').value = now;
+      convertTs();
+    });
+
+    document.getElementById('tsInput').addEventListener('input', convertTs);
+    document.querySelectorAll('input[name="tsUnit"]').forEach(r => r.addEventListener('change', convertTs));
+    document.getElementById('dtInput').addEventListener('change', convertDt);
+
+    // 初期値: 現在日時を日時入力に設定
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    document.getElementById('dtInput').value =
+      `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    convertDt();
+  </script>
+</body>
+</html>
